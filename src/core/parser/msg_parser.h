@@ -320,6 +320,7 @@ typedef struct sip_msg {
 	struct hdr_field* server;
 	struct hdr_field* content_disposition;
 	struct hdr_field* diversion;
+	struct hdr_field* history_info;
 	struct hdr_field* rpid;
 	struct hdr_field* refer_to;
 	struct hdr_field* session_expires;

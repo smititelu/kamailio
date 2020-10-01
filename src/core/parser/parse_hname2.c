@@ -73,6 +73,8 @@ static ksr_hdr_map_t _ksr_hdr_map[] = {
 	{ str_init("f"), HDR_FROM_T, HDR_FROM_F },
 	{ str_init("From"), HDR_FROM_T, HDR_FROM_F },
 
+	{ str_init("History-Info"), HDR_HISTORY_INFO_T, HDR_HISTORY_INFO_F },
+
 	{ str_init("i"), HDR_CALLID_T, HDR_CALLID_F },
 	{ str_init("Identity"), HDR_IDENTITY_T, HDR_IDENTITY_F },
 	{ str_init("Identity-Info"), HDR_IDENTITY_INFO_T, HDR_IDENTITY_INFO_F },

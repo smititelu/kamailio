@@ -458,6 +458,7 @@ struct sip_msg*  sip_msg_shm_clone( struct sip_msg *org_msg, int *sip_msg_len,
 		case HDR_SERVER_T:
 		case HDR_CONTENTDISPOSITION_T:
 		case HDR_DIVERSION_T:
+		case HDR_HISTORY_INFO_T:
 		case HDR_RPID_T:
 		case HDR_REFER_TO_T:
 		case HDR_SIPIFMATCH_T:
@@ -862,6 +863,11 @@ struct sip_msg*  sip_msg_shm_clone( struct sip_msg *org_msg, int *sip_msg_len,
 		case HDR_DIVERSION_T:
 			if (!HOOK_SET(diversion)) {
 				new_msg->diversion = new_hdr;
+			}
+			break;
+		case HDR_HISTORY_INFO_T:
+			if (!HOOK_SET(history_info)) {
+				new_msg->history_info = new_hdr;
 			}
 			break;
 		case HDR_RPID_T:

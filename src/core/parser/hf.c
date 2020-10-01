@@ -90,6 +90,10 @@ void clean_hdr_field(struct hdr_field* const hf)
 			free_to(hf->parsed);
 			break;
 
+		case HDR_HISTORY_INFO_T:
+			free_to(hf->parsed);
+			break;
+
 		case HDR_EVENT_T:
 			free_event((event_t**)h_parsed);
 			break;

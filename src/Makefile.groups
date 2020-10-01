@@ -10,7 +10,7 @@
 
 # - basic used modules, with no extra dependency (widespread usage)
 mod_list_basic=async auth benchmark blst cfg_rpc cfgutils corex counters \
-				   ctl debugger diversion enum exec ipops kex mangler maxfwd \
+				   ctl debugger diversion history_info enum exec ipops kex mangler maxfwd \
 				   mediaproxy mqueue \
 				   nat_traversal nathelper path pike pv ratelimit rr rtimer \
 				   rtpproxy sanity sdpops siputils sl statistics textops \

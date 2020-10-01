@@ -224,6 +224,7 @@ char* get_hdr_field(char* const buf, char* const end, struct hdr_field* const hd
 		case HDR_SERVER_T:
 		case HDR_CONTENTDISPOSITION_T:
 		case HDR_DIVERSION_T:
+		case HDR_HISTORY_INFO_T:
 		case HDR_RPID_T:
 		case HDR_SIPIFMATCH_T:
 		case HDR_REFER_TO_T:
@@ -472,6 +473,10 @@ int parse_headers(struct sip_msg* const msg, const hdr_flags_t flags, const int 
 			case HDR_DIVERSION_T:
 				if (msg->diversion==0) msg->diversion = hf;
 				msg->parsed_flag|=HDR_DIVERSION_F;
+				break;
+			case HDR_HISTORY_INFO_T:
+				msg->history_info = hf;
+				msg->parsed_flag|=HDR_HISTORY_INFO_F;
 				break;
 			case HDR_RPID_T:
 				if (msg->rpid==0) msg->rpid = hf;

@@ -106,8 +106,9 @@ enum _hdr_types_t {
 	HDR_PRIVACY_T				= 53   /*!< Privacy header field */,
 	HDR_REASON_T				= 54   /**< Reason header field */,
 	HDR_CALLINFO_T				= 55   /*!< Call-Info header field*/,
+	HDR_HISTORY_INFO_T			= 56   /*!< History-Info header field */,
 
-	HDR_EOH_T					= 56   /*!< End of message header (lastid + 1) */
+	HDR_EOH_T					= 57   /*!< End of message header (lastid + 1) */
 };
 
 
@@ -157,6 +158,7 @@ typedef unsigned long long hdr_flags_t;
 #define HDR_SERVER_F				HDR_F_DEF(SERVER)
 #define HDR_CONTENTDISPOSITION_F	HDR_F_DEF(CONTENTDISPOSITION)
 #define HDR_DIVERSION_F				HDR_F_DEF(DIVERSION)
+#define HDR_HISTORY_INFO_F			HDR_F_DEF(HISTORY_INFO)
 #define HDR_RPID_F					HDR_F_DEF(RPID)
 #define HDR_REFER_TO_F				HDR_F_DEF(REFER_TO)
 #define HDR_SIPIFMATCH_F			HDR_F_DEF(SIPIFMATCH)
@@ -220,6 +222,7 @@ static inline int hdr_allocs_parse(struct hdr_field* hdr)
 		case HDR_CSEQ_T:
 		case HDR_DATE_T:
 		case HDR_DIVERSION_T:
+		case HDR_HISTORY_INFO_T:
 		case HDR_EVENT_T:
 		case HDR_EXPIRES_T:
 		case HDR_MIN_EXPIRES_T:
