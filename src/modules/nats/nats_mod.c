@@ -29,6 +29,7 @@ MODULE_VERSION
 init_nats_sub_ptr _init_nats_sc = NULL;
 init_nats_server_ptr _init_nats_srv = NULL;
 nats_consumer_worker_t *nats_workers = NULL;
+nats_connection_ptr _nats_connection = NULL;
 int _nats_proc_count;
 char *eventData = NULL;
 
@@ -42,9 +43,13 @@ static param_export_t params[] = {{"nats_url", PARAM_STRING | USE_FUNC_PARAM,
 		{"subject_queue_group", PARAM_STRING | USE_FUNC_PARAM,
 				(void *)_init_nats_sub_add}};
 
+static cmd_export_t functions[] = {
+		{"nats_publish", (cmd_function)nats_publish_f, 2, 0, 0, ANY_ROUTE},
+};
+
 struct module_exports exports = {
 		"nats", DEFAULT_DLFLAGS, /* dlopen flags */
-		0,						 /* Exported functions */
+		functions,				 /* Exported functions */
 		params,					 /* Exported parameters */
 		0,						 /* exported MI functions */
 		nats_mod_pvs,			 /* exported pseudo-variables */
@@ -103,65 +108,10 @@ static void closedCB(natsConnection *nc, void *closure)
 }
 
 void nats_consumer_worker_proc(
-		nats_consumer_worker_t *worker, const char *servers[])
+		nats_consumer_worker_t *worker, nats_connection_ptr c)
 {
-	natsStatus s;
-	bool closed = false;
-	int i;
+	natsStatus s = NATS_OK;
 
-	LM_INFO("nats worker connecting to subject [%s] queue group [%s]\n",
-			worker->subject, worker->queue_group);
-
-	s = natsOptions_Create(&worker->opts);
-	if(s != NATS_OK) {
-		LM_ERR("could not create nats options [%s]\n", natsStatus_GetText(s));
-		return;
-	}
-	// use these defaults
-	natsOptions_SetAllowReconnect(worker->opts, true);
-	natsOptions_SetSecure(worker->opts, false);
-	natsOptions_SetMaxReconnect(worker->opts, 10000);
-	natsOptions_SetReconnectWait(worker->opts, 2 * 1000);	  // 2s
-	natsOptions_SetPingInterval(worker->opts, 2 * 60 * 1000); // 2m
-	natsOptions_SetMaxPingsOut(worker->opts, 2);
-	natsOptions_SetIOBufSize(worker->opts, 32 * 1024); // 32 KB
-	natsOptions_SetMaxPendingMsgs(worker->opts, 65536);
-	natsOptions_SetTimeout(worker->opts, 2 * 1000);					// 2s
-	natsOptions_SetReconnectBufSize(worker->opts, 8 * 1024 * 1024); // 8 MB;
-	natsOptions_SetReconnectJitter(worker->opts, 100, 1000); // 100ms, 1s;
-	s = natsOptions_SetDisconnectedCB(worker->opts, disconnectedCb, NULL);
-	if(s != NATS_OK) {
-		LM_ERR("could not set disconnect callback [%s]\n",
-				natsStatus_GetText(s));
-	}
-	s = natsOptions_SetReconnectedCB(worker->opts, reconnectedCb, NULL);
-	if(s != NATS_OK) {
-		LM_ERR("could not set reconnect callback [%s]\n",
-				natsStatus_GetText(s));
-	}
-	s = natsOptions_SetRetryOnFailedConnect(
-			worker->opts, true, connectedCB, NULL);
-	if(s != NATS_OK) {
-		LM_ERR("could not set retry on failed callback [%s]\n",
-				natsStatus_GetText(s));
-	}
-	s = natsOptions_SetClosedCB(worker->opts, closedCB, (void *)&closed);
-	if(s != NATS_OK) {
-		LM_ERR("could not set closed callback [%s]\n", natsStatus_GetText(s));
-	}
-
-	i = 0;
-	while (servers[i] != NULL) {
-		s = natsOptions_SetServers(worker->opts, &servers[i], 1);
-		if(s != NATS_OK) {
-			LM_ERR("could not set nats server %s [%s]\n", servers[i], natsStatus_GetText(s));
-		}
-		s = natsConnection_Connect(&worker->conn[i], worker->opts);
-		if(s != NATS_OK) {
-			LM_ERR("could not connect %s [%s]\n", servers[i], natsStatus_GetText(s));
-		}
-		i++;
-	}
 	// create a loop
 	natsLibuv_Init();
 	worker->uvLoop = uv_default_loop();
@@ -170,8 +120,15 @@ void nats_consumer_worker_proc(
 	} else {
 		s = NATS_ERR;
 	}
+	if(s != NATS_OK) {
+		LM_ERR("could not set event loop [%s]\n", natsStatus_GetText(s));
+	}
+	if((s = natsConnection_Connect(&worker->conn, c->opts)) != NATS_OK) {
+		LM_ERR("could not connect to nats servers [%s]\n",
+				natsStatus_GetText(s));
+	}
 
-	s = natsOptions_SetEventLoop(worker->opts, (void *)worker->uvLoop,
+	s = natsOptions_SetEventLoop(c->opts, (void *)worker->uvLoop,
 			natsLibuv_Attach, natsLibuv_Read, natsLibuv_Write,
 			natsLibuv_Detach);
 	if(s != NATS_OK) {
@@ -182,14 +139,10 @@ void nats_consumer_worker_proc(
 		LM_ERR("error setting options [%s]\n", natsStatus_GetText(s));
 	}
 
-	i = 0;
-	while (servers[i] != NULL) {
-		s = natsConnection_QueueSubscribe(&worker->subscription, worker->conn[i],
-				worker->subject, worker->queue_group, onMsg, worker->on_message);
-		if(s != NATS_OK) {
-			LM_ERR("could not subscribe %s [%s]\n", servers[i], natsStatus_GetText(s));
-		}
-		i++;
+	s = natsConnection_QueueSubscribe(&worker->subscription, worker->conn,
+			worker->subject, worker->queue_group, onMsg, worker->on_message);
+	if(s != NATS_OK) {
+		LM_ERR("could not subscribe [%s]\n", natsStatus_GetText(s));
 	}
 
 	s = natsSubscription_SetPendingLimits(worker->subscription, -1, -1);
@@ -206,6 +159,10 @@ void nats_consumer_worker_proc(
 	if(s != NATS_OK) {
 		LM_ERR("nats error [%s]\n", natsStatus_GetText(s));
 	}
+
+	LM_INFO("nats queue group worker connected to subject [%s] queue group "
+			"[%s]\n",
+			worker->subject, worker->queue_group);
 }
 
 static int mod_init(void)
@@ -215,6 +172,11 @@ static int mod_init(void)
 		return -1;
 	}
 	nats_init_environment();
+	_nats_connection = _init_nats_connection();
+	if(nats_init_connection(_nats_connection) < 0) {
+		LM_ERR("failed to init nat connections\n");
+		return -1;
+	}
 	register_procs(_nats_proc_count);
 	nats_workers =
 			shm_malloc(_nats_proc_count * sizeof(nats_consumer_worker_t));
@@ -232,10 +194,6 @@ int init_worker(
 	int buffsize = strlen(subject) + 6;
 	char routename[buffsize];
 	int rt;
-	int len;
-	char *sc;
-	int num_servers = 0;
-	init_nats_server_ptr s0;
 
 	memset(worker, 0, sizeof(*worker));
 	worker->subject = shm_malloc(strlen(subject) + 1);
@@ -244,30 +202,9 @@ int init_worker(
 	worker->queue_group = shm_malloc(strlen(queue_group) + 1);
 	strcpy(worker->queue_group, queue_group);
 	worker->queue_group[strlen(queue_group)] = '\0';
-	memset(worker->init_nats_servers, 0, sizeof(worker->init_nats_servers));
 	worker->on_message =
 			(nats_on_message_ptr)shm_malloc(sizeof(nats_on_message));
 	memset(worker->on_message, 0, sizeof(nats_on_message));
-
-	s0 = _init_nats_srv;
-	while(s0) {
-		if(s0->url != NULL && num_servers < NATS_MAX_SERVERS) {
-			len = strlen(s0->url);
-			sc = shm_malloc(len + 1);
-			if(!sc) {
-				LM_ERR("no shm memory left\n");
-				return -1;
-			}
-			strcpy(sc, s0->url);
-			sc[len] = '\0';
-			worker->init_nats_servers[num_servers++] = sc;
-		}
-		s0 = s0->next;
-	}
-	if(num_servers == 0) {
-		worker->init_nats_servers[0] = NATS_DEFAULT_URL;
-		LM_INFO("using default server [%s]\n", NATS_DEFAULT_URL);
-	}
 
 	snprintf(routename, buffsize, "nats:%s", subject);
 	routename[buffsize] = '\0';
@@ -282,10 +219,10 @@ int init_worker(
 	return 0;
 }
 
-void worker_loop(int id)
+void worker_loop(int id, nats_connection_ptr c)
 {
 	nats_consumer_worker_t *worker = &nats_workers[id];
-	nats_consumer_worker_proc(worker, (const char **)worker->init_nats_servers);
+	nats_consumer_worker_proc(worker, c);
 	for(;;) {
 		sleep(1000);
 	}
@@ -310,12 +247,6 @@ static int mod_child_init(int rank)
 			n = n->next;
 			i++;
 		}
-		if(nats_cleanup_init_sub() < 0) {
-			LM_INFO("could not cleanup init data\n");
-		}
-		if(nats_cleanup_init_servers() < 0) {
-			LM_INFO("could not cleanup init server data\n");
-		}
 		return 0;
 	}
 
@@ -326,7 +257,7 @@ static int mod_child_init(int rank)
 				LM_ERR("failed to fork worker process %d\n", i);
 				return -1;
 			} else if(newpid == 0) {
-				worker_loop(i);
+				worker_loop(i, _nats_connection);
 			} else {
 				nats_workers[i].pid = newpid;
 			}
@@ -357,6 +288,104 @@ int nats_cleanup_init_sub()
 	return 0;
 }
 
+int nats_init_connection(nats_connection_ptr c)
+{
+	natsStatus s = NATS_OK;
+	bool closed = false;
+	int len;
+	char *sc;
+	int num_servers = 0;
+	init_nats_server_ptr s0;
+
+	s0 = _init_nats_srv;
+	while(s0) {
+		if(s0->url != NULL && num_servers < NATS_MAX_SERVERS) {
+			len = strlen(s0->url);
+			sc = shm_malloc(len + 1);
+			if(!sc) {
+				LM_ERR("no shm memory left\n");
+				return -1;
+			}
+			strcpy(sc, s0->url);
+			sc[len] = '\0';
+			c->servers[num_servers++] = sc;
+			LM_INFO("adding server [%s] [%d]\n", sc, num_servers);
+		}
+		s0 = s0->next;
+	}
+	if(num_servers == 0) {
+		len = strlen(NATS_DEFAULT_URL);
+		sc = shm_malloc(len + 1);
+		if(!sc) {
+			LM_ERR("no shm memory left\n");
+			return -1;
+		}
+		strcpy(sc, NATS_DEFAULT_URL);
+		sc[len] = '\0';
+		c->servers[0] = sc;
+		LM_INFO("using default server [%s]\n", sc);
+	}
+
+	// nats create options
+	if((s = natsOptions_Create(&c->opts)) != NATS_OK) {
+		LM_ERR("could not create nats options [%s]\n", natsStatus_GetText(s));
+		return -1;
+	}
+
+	// use these defaults
+	natsOptions_SetAllowReconnect(c->opts, true);
+	natsOptions_SetSecure(c->opts, false);
+	natsOptions_SetMaxReconnect(c->opts, 10000);
+	natsOptions_SetReconnectWait(c->opts, 2 * 1000);	 // 2s
+	natsOptions_SetPingInterval(c->opts, 2 * 60 * 1000); // 2m
+	natsOptions_SetMaxPingsOut(c->opts, 2);
+	natsOptions_SetIOBufSize(c->opts, 32 * 1024); // 32 KB
+	natsOptions_SetMaxPendingMsgs(c->opts, 65536);
+	natsOptions_SetTimeout(c->opts, 2 * 1000);				   // 2s
+	natsOptions_SetReconnectBufSize(c->opts, 8 * 1024 * 1024); // 8 MB;
+	natsOptions_SetReconnectJitter(c->opts, 100, 1000);		   // 100ms, 1s;
+
+	// nats set servers and options
+	if((s = natsOptions_SetServers(
+				c->opts, (const char **)c->servers, num_servers))
+			!= NATS_OK) {
+		LM_ERR("could not set nats server[%s]\n", natsStatus_GetText(s));
+		return -1;
+	}
+
+	// nats set callbacks
+	s = natsOptions_SetDisconnectedCB(c->opts, disconnectedCb, NULL);
+	if(s != NATS_OK) {
+		LM_ERR("could not set disconnect callback [%s]\n",
+				natsStatus_GetText(s));
+	}
+
+	s = natsOptions_SetReconnectedCB(c->opts, reconnectedCb, NULL);
+	if(s != NATS_OK) {
+		LM_ERR("could not set reconnect callback [%s]\n",
+				natsStatus_GetText(s));
+	}
+
+	s = natsOptions_SetRetryOnFailedConnect(c->opts, true, connectedCB, NULL);
+	if(s != NATS_OK) {
+		LM_ERR("could not set retry on failed callback [%s]\n",
+				natsStatus_GetText(s));
+	}
+
+	s = natsOptions_SetClosedCB(c->opts, closedCB, (void *)&closed);
+	if(s != NATS_OK) {
+		LM_ERR("could not set closed callback [%s]\n", natsStatus_GetText(s));
+	}
+
+	// nats connect to the server
+	if((s = natsConnection_Connect(&c->publish_conn, c->opts)) != NATS_OK) {
+		LM_ERR("could not connect to nats servers [%s]\n",
+				natsStatus_GetText(s));
+	}
+	LM_INFO("connected to nats servers\n");
+	return 0;
+}
+
 int nats_cleanup_init_servers()
 {
 	init_nats_server_ptr s0;
@@ -367,17 +396,39 @@ int nats_cleanup_init_servers()
 		if(s0->url != NULL) {
 			shm_free(s0->url);
 		}
+
 		shm_free(s0);
 		s0 = s1;
 	}
+
+	// To silence reports of memory still in used with valgrind
+	nats_Close();
+
 	_init_nats_srv = NULL;
+	return 0;
+}
+
+int nats_cleanup_connection(nats_connection_ptr c)
+{
+	if(c->publish_conn != NULL) {
+		natsConnection_Close(c->publish_conn);
+		natsConnection_Destroy(c->publish_conn);
+	}
+	if(c->opts != NULL) {
+		natsOptions_Destroy(c->opts);
+	}
+	for(int s = 0; s < NATS_MAX_SERVERS; s++) {
+		if(c->servers[s]) {
+			shm_free(c->servers[s]);
+		}
+	}
+	shm_free(c);
 	return 0;
 }
 
 int nats_destroy_workers()
 {
-	int i, j;
-	int s;
+	int i;
 	nats_consumer_worker_t *worker;
 	for(i = 0; i < _nats_proc_count; i++) {
 		worker = &nats_workers[i];
@@ -386,19 +437,13 @@ int nats_destroy_workers()
 				natsSubscription_Unsubscribe(worker->subscription);
 				natsSubscription_Destroy(worker->subscription);
 			}
-			j = 0;
-			while (worker->conn[j] != NULL) {
-				natsConnection_Close(worker->conn[j]);
-				natsConnection_Destroy(worker->conn[j]);
-				j++;
-			}
-			if(worker->opts != NULL) {
-				natsOptions_Destroy(worker->opts);
+			if(worker->conn != NULL) {
+				natsConnection_Close(worker->conn);
+				natsConnection_Destroy(worker->conn);
 			}
 			if(worker->uvLoop != NULL) {
 				uv_loop_close(worker->uvLoop);
 			}
-			nats_Close();
 			if(worker->subject != NULL) {
 				shm_free(worker->subject);
 			}
@@ -407,11 +452,6 @@ int nats_destroy_workers()
 			}
 			if(worker->on_message != NULL) {
 				shm_free(worker->on_message);
-			}
-			for(s = 0; s < NATS_MAX_SERVERS; s++) {
-				if(worker->init_nats_servers[s]) {
-					shm_free(worker->init_nats_servers[s]);
-				}
 			}
 			shm_free(worker);
 		}
@@ -426,6 +466,15 @@ static void mod_destroy(void)
 {
 	if(nats_destroy_workers() < 0) {
 		LM_ERR("could not cleanup workers\n");
+	}
+	if(nats_cleanup_init_sub() < 0) {
+		LM_INFO("could not cleanup init data\n");
+	}
+	if(nats_cleanup_connection(_nats_connection) < 0) {
+		LM_INFO("could not cleanup connection\n");
+	}
+	if(nats_cleanup_init_servers() < 0) {
+		LM_INFO("could not cleanup init server data\n");
 	}
 }
 
@@ -522,6 +571,7 @@ init_nats_server_ptr _init_nats_server_list_new(char *url)
 	return p;
 }
 
+
 int init_nats_server_url_add(char *url)
 {
 	init_nats_server_ptr n;
@@ -533,6 +583,14 @@ int init_nats_server_url_add(char *url)
 	n->next = _init_nats_srv;
 	_init_nats_srv = n;
 	return 0;
+}
+
+nats_connection_ptr _init_nats_connection()
+{
+	nats_connection_ptr p =
+			(nats_connection_ptr)shm_malloc(sizeof(nats_connection));
+	memset(p, 0, sizeof(nats_connection));
+	return p;
 }
 
 init_nats_sub_ptr _init_nats_sub_new(char *sub, char *queue_group)
@@ -602,4 +660,26 @@ int nats_pv_get_event_payload(
 {
 	return eventData == NULL ? pv_get_null(msg, param, res)
 							 : pv_get_strzval(msg, param, res, eventData);
+}
+
+static int nats_publish_f(struct sip_msg *msg, char *subj, char *payload)
+{
+	return _nats_publish_f(msg, subj, payload, _nats_connection);
+}
+
+static int _nats_publish_f(
+		struct sip_msg *msg, char *subj, char *payload, nats_connection_ptr c)
+{
+	natsStatus status = NATS_OK;
+
+	int dataLen = 0;
+	dataLen = (int)strlen(payload);
+
+	if((status = natsConnection_Publish(
+				c->publish_conn, subj, (const void *)payload, dataLen))
+			!= NATS_OK) {
+		LM_ERR("could not publish to subject %s [%s]\n", subj,
+				natsStatus_GetText(status));
+	}
+	return 1;
 }
