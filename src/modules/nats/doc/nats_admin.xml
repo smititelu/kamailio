@@ -97,7 +97,7 @@
 				(str)
 			</title>
 			<para>
-				The nats url. More than one url can be configured. For each url, there will be one separate nats connection, either for subscriber or publisher.
+				The nats url.
 			</para>
 			<para>
 				Usage: nats related.
@@ -151,6 +151,31 @@ modparam("nats", "subject_queue_group", "MyQueue2:2021")
 			</example>
 		</section>
 	</section>
+
+	<section>
+		<title>Functions</title>
+		<section id="nats.f.nats_publish">
+			<title>
+				<function moreinfo="none">nats_publish(subject, payload)</function>
+			</title>
+			<para>
+				Publishes the payload text to subject.
+			</para>
+			<example>
+				<title>
+					<function>nats_publish</function>
+					usage
+				</title>
+				<programlisting format="linespecific">
+...
+$var(my_info)="$ci=" + $ci + " $fU=" + $fU;
+nats_publish("mysubject", "$var(my_info)"); # publish $var(my_info) to "mysubject"
+...
+				</programlisting>
+			</example>
+		</section>
+	</section>
+
 	<section>
 		<title>Pseudo Variables</title>
 		<itemizedlist>
